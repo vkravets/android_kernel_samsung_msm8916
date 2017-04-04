@@ -32,6 +32,14 @@ modules.builtin
 *.lzo
 *.patch
 *.gcno
+*.sh
+
+# minimal rules
+
+/*.scmversion
+/*.zip
+/*.tar.md5
+/*.sh
 
 #
 # Top-level generic files
