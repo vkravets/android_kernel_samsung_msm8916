@@ -64,6 +64,167 @@ static struct clk_lookup clock_tbl_a7[] = {
 	CLK_LOOKUP("cpu3_clk",   a7ssmux.c, "8600664.qcom,pm"),
 };
 
+#ifdef CONFIG_ARCH_MSM8916
+extern int cpr_regulator_get_corner_voltage(struct regulator *regulator,
+		int corner);
+extern int cpr_regulator_set_corner_voltage(struct regulator *regulator,
+		int corner, int volt);
+
+ssize_t cpu_clock_get_vdd(char *buf)
+{
+	ssize_t count = 0;
+	int i, uv;
+
+	if (!buf)
+		return 0;
+
+	for (i = 1; i < a7ssmux.c.num_fmax; i++) {
+		uv = cpr_regulator_get_corner_voltage(
+					a7ssmux.c.vdd_class->regulator[0],
+					a7ssmux.c.vdd_class->vdd_uv[i]);
+		if (uv < 0)
+			return 0;
+		count += sprintf(buf + count, "%lumhz: %d mV\n",
+					a7ssmux.c.fmax[i] / 1000000,
+					uv / 1000);
+	}
+
+	return count;
+}
+
+ssize_t cpu_clock_set_vdd(const char *buf, size_t count)
+{
+	int i, mv, ret;
+	char line[32];
+
+	if (!buf)
+		return -EINVAL;
+
+	for (i = 1; i < a7ssmux.c.num_fmax; i++) {
+		ret = sscanf(buf, "%d", &mv);
+		if (ret != 1)
+			return -EINVAL;
+
+		ret = cpr_regulator_set_corner_voltage(
+					a7ssmux.c.vdd_class->regulator[0],
+					a7ssmux.c.vdd_class->vdd_uv[i],
+					mv * 1000);
+        if (ret < 0)
+			return ret;
+
+        ret = sscanf(buf, "%s", line);
+		buf += strlen(line) + 1;
+	}
+
+	return count;
+}
+#endif
+
+static void print_opp_table(int a7_cpu)
+{
+	struct opp *oppfmax, *oppfmin;
+	unsigned long apc0_fmax = a7ssmux.c.fmax[a7ssmux.c.num_fmax - 1];
+	unsigned long apc0_fmin = a7ssmux.c.fmax[1];
+
+	rcu_read_lock();
+	oppfmax = dev_pm_opp_find_freq_exact(get_cpu_device(a7_cpu), apc0_fmax,
+						true);
+	oppfmin = dev_pm_opp_find_freq_exact(get_cpu_device(a7_cpu), apc0_fmin,
+						true);
+
+	/* One time information during boot. */
+	pr_info("clock_cpu: a7: OPP voltage for %lu: %ld\n", apc0_fmin,
+			dev_pm_opp_get_voltage(oppfmin));
+	pr_info("clock_cpu: a7: OPP voltage for %lu: %ld\n", apc0_fmax,
+			dev_pm_opp_get_voltage(oppfmax));
+
+	rcu_read_unlock();
+}
+
+static int add_opp(struct clk *c, struct device *cpudev, struct device *vregdev,
+			unsigned long max_rate)
+{
+	unsigned long rate = 0;
+	int level;
+	long ret, uv, corner;
+
+	while (1) {
+		ret = clk_round_rate(c, rate + 1);
+		if (ret < 0) {
+			pr_warn("clock-cpu: round_rate failed at %lu\n", rate);
+			return ret;
+		}
+
+		rate = ret;
+
+		level = find_vdd_level(c, rate);
+		if (level <= 0) {
+			pr_warn("clock-cpu: no uv for %lu.\n", rate);
+			return -EINVAL;
+		}
+
+		uv = corner = c->vdd_class->vdd_uv[level];
+
+		/*
+		 * Populate both CPU and regulator devices with the
+		 * freq-to-corner OPP table to maintain backward
+		 * compatibility.
+		 */
+		ret = dev_pm_opp_add(cpudev, rate, corner);
+		if (ret) {
+			pr_warn("clock-cpu: couldn't add OPP for %lu\n",
+					rate);
+			return ret;
+		}
+
+		ret = dev_pm_opp_add(vregdev, rate, corner);
+		if (ret) {
+			pr_warn("clock-cpu: couldn't add OPP for %lu\n",
+					rate);
+			return ret;
+		}
+
+		if (rate >= max_rate)
+			break;
+	}
+
+	return 0;
+}
+
+static void populate_opp_table(struct platform_device *pdev)
+{
+	struct platform_device *apc_dev;
+	struct device_node *apc_node;
+	unsigned long apc_fmax;
+	int cpu, a7_cpu = 0;
+
+	apc_node = of_parse_phandle(pdev->dev.of_node, "cpu-vdd-supply", 0);
+	if (!apc_node) {
+		pr_err("can't find the apc0 dt node.\n");
+		return;
+	}
+
+	apc_dev = of_find_device_by_node(apc_node);
+	if (!apc_dev) {
+		pr_err("can't find the apc0 device node.\n");
+		return;
+	}
+
+	apc_fmax = a7ssmux.c.fmax[a7ssmux.c.num_fmax - 1];
+
+	for_each_possible_cpu(cpu) {
+		a7_cpu = cpu;
+		WARN(add_opp(&a7ssmux.c, get_cpu_device(cpu),
+					&apc_dev->dev, apc_fmax),
+				"Failed to add OPP levels for A7\n");
+	}
+
+	/* One time print during bootup */
+	pr_info("clock-a7: OPP tables populated (cpu %d)\n", a7_cpu);
+
+	print_opp_table(a7_cpu);
+}
+
 static int of_get_fmax_vdd_class(struct platform_device *pdev, struct clk *c,
 								char *prop_name)
 {
