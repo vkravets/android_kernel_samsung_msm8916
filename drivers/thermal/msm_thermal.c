@@ -45,7 +45,7 @@
 #define TRACE_MSM_THERMAL
 #include <trace/trace_thermal.h>
 
-#define MAX_CURRENT_UA 100000
+#define MAX_CURRENT_UA 165000
 #define MAX_RAILS 5
 #define MAX_THRESHOLD 2
 #define MONITOR_ALL_TSENS -1
