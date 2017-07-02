@@ -112,6 +112,7 @@ static void sdhci_dump_state(struct sdhci_host *host)
 
 void sdhci_dumpregs(struct sdhci_host *host)
 {
+#ifdef CONFIG_MMC_DEBUG
 	pr_info(DRIVER_NAME ": =========== REGISTER DUMP (%s)===========\n",
 		mmc_hostname(host->mmc));
 
@@ -173,6 +174,7 @@ void sdhci_dumpregs(struct sdhci_host *host)
 		host->ops->dump_vendor_regs(host);
 	sdhci_dump_state(host);
 	pr_info(DRIVER_NAME ": ===========================================\n");
+#endif
 }
 
 #define MAX_PM_QOS_TIMEOUT_VALUE	100000 /* 100 ms */
